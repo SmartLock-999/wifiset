@@ -249,6 +249,15 @@
     line-height: 1.6;
     text-align: center;
   }
+  .note-muted {
+    font-size: 0.7rem;
+    background: #1a1d26;
+    border-left: 3px solid var(--muted);
+    padding: 8px 10px;
+    border-radius: 6px;
+    margin-top: 6px;
+    color: var(--muted);
+  }
 </style>
 </head>
 <body>
@@ -312,7 +321,7 @@
   </div>
 
   <hr>
-  <div class="section-title">供裝設定（若留空則保持原值）</div>
+  <div class="section-title">供裝設定（若裝置韌體不支援則自動略過）</div>
 
   <div class="field">
     <div class="label">設備帳號 (MQTT User)</div>
@@ -348,6 +357,10 @@
 
   <button class="btn btn-primary" id="btnSend" disabled>套用並重啟裝置</button>
 
+  <div class="note-muted" id="fwNote" style="display:none">
+    ℹ️ 已連線的韌體僅支援 WiFi 設定（不支援供裝欄位），其餘輸入將被忽略。
+  </div>
+
   <hr>
   <div>
     <div class="label" style="margin-bottom:8px">操作記錄</div>
@@ -358,13 +371,15 @@
 </div>
 
 <script>
-// ==================== 正確版 UUID（對應裝置韌體） ====================
+// ==================== 特徵 UUID（依韌體實際定義） ====================
 const SVC_UUID    = '12345678-1234-5678-1234-56789abcdef0';
 const SSID_UUID   = '12345678-1234-5678-1234-56789abcdef1';
 const PASS_UUID   = '12345678-1234-5678-1234-56789abcdef2';
 const CMD_UUID    = '12345678-1234-5678-1234-56789abcdef3';
 const STATUS_UUID = '12345678-1234-5678-1234-56789abcdef4';
-const SCAN_UUID   = '12345678-1234-5678-1234-56789abcdef5';
+const SCAN_UUID   = '12345678-1234-5678-1234-56789abcdef5';   // 部分韌體可能沒有
+
+// 供裝特徵（新韌體才具備，若沒有則略過）
 const MQTT_USER_UUID = '12345678-1234-5678-1234-56789abcde01';
 const MQTT_PASS_UUID = '12345678-1234-5678-1234-56789abcde02';
 const DEV_ID_UUID    = '12345678-1234-5678-1234-56789abcde03';
@@ -373,11 +388,15 @@ const SERVER_NO_UUID = '12345678-1234-5678-1234-56789abcde06';
 
 // 全局狀態
 let device, server, chars = {}, connected = false, scanResults = [], currentSsid = '';
+// 標記哪些供裝特徵實際存在
+let hasProvision = false;
+
 const $ = id => document.getElementById(id);
 const dot = $('dot'), statusText = $('statusText'), btnConnect = $('btnConnect'),
       btnScan = $('btnScan'), btnSend = $('btnSend'), ssidSelect = $('ssidSelect'),
       customSsid = $('customSsid'), customWrap = $('customSsidWrap'),
-      passInput = $('passInput'), logWrap = $('logWrap'), ssidHint = $('ssidHint');
+      passInput = $('passInput'), logWrap = $('logWrap'), ssidHint = $('ssidHint'),
+      fwNote = $('fwNote');
 
 if (!navigator.bluetooth) $('noSupport').style.display = 'block';
 
@@ -390,6 +409,7 @@ function log(msg, type = '') {
   logWrap.scrollTop = logWrap.scrollHeight;
 }
 
+// 下拉選單重建
 function buildDropdown() {
   ssidSelect.innerHTML = '';
   if (currentSsid && !scanResults.find(r => r.ssid === currentSsid)) {
@@ -419,7 +439,6 @@ function onSsidChange() {
   customWrap.style.display = v === '__manual__' ? 'block' : 'none';
   ssidHint.style.display = 'none';
 }
-
 ssidSelect.addEventListener('change', onSsidChange);
 
 function getSSID() {
@@ -447,6 +466,7 @@ function onDisconnected() {
   customWrap.style.display = 'none';
   ssidHint.style.display = 'none';
   setScanBusy(false);
+  fwNote.style.display = 'none';
   log('BLE 連線中斷', 'warn');
   chars = {};
 }
@@ -455,9 +475,171 @@ function disconnect() {
   if (device && device.gatt.connected) device.gatt.disconnect();
 }
 
+// 嘗試獲取某個特徵，失敗回傳 null
+async function tryGetChar(svc, uuid, name) {
+  try {
+    const ch = await svc.getCharacteristic(uuid);
+    log(`✓ 發現特徵：${name}`, 'ok');
+    return ch;
+  } catch (e) {
+    log(`⊘ 略過 ${name}（韌體不支援）`, 'warn');
+    return null;
+  }
+}
+
+// 嘗試讀取特徵值，失敗則保持欄位為空
+async function tryReadChar(ch, fieldId) {
+  if (!ch) return;
+  try {
+    const dec = new TextDecoder();
+    const val = await ch.readValue();
+    const str = dec.decode(val).trim();
+    if (fieldId) $(fieldId).value = str;
+    return str;
+  } catch (e) {
+    // 忽略讀取錯誤
+  }
+}
+
+// 連線邏輯
+btnConnect.addEventListener('click', async () => {
+  if (connected) {
+    disconnect();
+    return;
+  }
+  if (!navigator.bluetooth) return;
+  try {
+    setStatus('connecting', '掃描中...');
+    btnConnect.disabled = true;
+    log('開始搜尋 SmartGate 裝置 (名稱前綴 SG-)...', 'info');
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'SG-' }],
+      optionalServices: [SVC_UUID]
+    });
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+    setStatus('connecting', `連線至 ${device.name} ...`);
+    log(`找到裝置：${device.name}，建立連線`, 'info');
+    server = await device.gatt.connect();
+    const svc = await server.getPrimaryService(SVC_UUID);
+
+    // ---------- 必備核心特徵 ----------
+    chars.ssid   = await svc.getCharacteristic(SSID_UUID);
+    chars.pass   = await svc.getCharacteristic(PASS_UUID);
+    chars.cmd    = await svc.getCharacteristic(CMD_UUID);
+    chars.status = await svc.getCharacteristic(STATUS_UUID);
+
+    // ---------- 選用掃描特徵 ----------
+    chars.scan = await tryGetChar(svc, SCAN_UUID, 'WiFi掃描');
+
+    // ---------- 選用供裝特徵 ----------
+    chars.mqttUser = await tryGetChar(svc, MQTT_USER_UUID, 'MQTT User');
+    chars.mqttPass = await tryGetChar(svc, MQTT_PASS_UUID, 'MQTT Pass');
+    chars.devId    = await tryGetChar(svc, DEV_ID_UUID, 'Device ID');
+    chars.email    = await tryGetChar(svc, EMAIL_UUID, 'Email');
+    chars.serverNo = await tryGetChar(svc, SERVER_NO_UUID, 'Server No');
+
+    // 判斷是否有任何供裝特徵
+    hasProvision = !!(chars.mqttUser || chars.mqttPass || chars.devId || chars.email || chars.serverNo);
+    if (!hasProvision) {
+      fwNote.style.display = 'block';
+    } else {
+      fwNote.style.display = 'none';
+    }
+
+    // 讀取目前 SSID
+    try {
+      const rawSsid = await chars.ssid.readValue();
+      currentSsid = new TextDecoder().decode(rawSsid).trim();
+      if (currentSsid) log(`目前裝置 SSID：${currentSsid}`, 'ok');
+    } catch(e) { currentSsid = ''; }
+
+    // 讀取供裝欄位現有值（僅當特徵存在時）
+    await tryReadChar(chars.mqttUser, 'mqttUser');
+    await tryReadChar(chars.mqttPass, 'mqttPass');
+    await tryReadChar(chars.devId, 'deviceId');
+    await tryReadChar(chars.email, 'userEmail');
+    await tryReadChar(chars.serverNo, 'serverNo');
+
+    // 訂閱狀態通知
+    await chars.status.startNotifications();
+    chars.status.addEventListener('characteristicvaluechanged', e => {
+      const msg = new TextDecoder().decode(e.target.value);
+      if (msg === 'APPLYING') {
+        log('裝置儲存設定中，即將重啟...', 'warn');
+        btnSend.disabled = true;
+      } else if (msg.startsWith('ERROR')) {
+        log(`裝置回報錯誤：${msg}`, 'err');
+      }
+    });
+
+    // 訂閱掃描結果（僅當掃描特徵存在時）
+    if (chars.scan) {
+      await chars.scan.startNotifications();
+      chars.scan.addEventListener('characteristicvaluechanged', e => {
+        const raw = new TextDecoder().decode(e.target.value).trim();
+        if (raw.startsWith('SCAN_DONE:')) {
+          const cnt = parseInt(raw.split(':')[1]) || 0;
+          log(`掃描完成，共 ${cnt} 個網路`, 'ok');
+          setScanBusy(false);
+          buildDropdown();
+        } else if (raw !== 'IDLE' && !raw.startsWith('SCAN')) {
+          const parts = raw.split('|');
+          if (parts.length === 2) {
+            const ssid = parts[0];
+            const rssi = parseInt(parts[1]);
+            if (ssid && !scanResults.find(r => r.ssid === ssid)) {
+              scanResults.push({ ssid, rssi });
+            }
+          } else if (raw.length > 0 && !scanResults.find(r => r.ssid === raw)) {
+            if (!raw.includes('|')) scanResults.push({ ssid: raw, rssi: 0 });
+          }
+        }
+      });
+    }
+
+    connected = true;
+    setStatus('connected', `已連線：${device.name}`);
+    btnConnect.textContent = '斷線';
+    btnConnect.disabled = false;
+    btnSend.disabled = false;
+
+    // 根據是否有掃描功能來設定掃描按鈕
+    if (chars.scan) {
+      btnScan.disabled = false;
+      log('藍芽連線成功，開始自動掃描 WiFi ...', 'ok');
+      await doScan();
+    } else {
+      btnScan.disabled = true;
+      log('藍芽連線成功（無掃描功能，請手動輸入 SSID）', 'info');
+      // 直接顯示手動輸入選擇
+      ssidSelect.innerHTML = '';
+      if (currentSsid) {
+        const o = document.createElement('option');
+        o.value = currentSsid;
+        o.textContent = `${currentSsid}（目前設定）`;
+        o.selected = true;
+        ssidSelect.appendChild(o);
+      }
+      const m = document.createElement('option');
+      m.value = '__manual__';
+      m.textContent = '── 手動輸入 ──';
+      ssidSelect.appendChild(m);
+      ssidSelect.disabled = false;
+      onSsidChange();
+    }
+  } catch (err) {
+    setStatus('error', '連線失敗');
+    log(`錯誤：${err.message}`, 'err');
+    btnConnect.disabled = false;
+    if (device && device.gatt) device.gatt.disconnect();
+    connected = false;
+  }
+});
+
+// 掃描 WiFi
 async function doScan() {
-  if (!connected || !chars.cmd) {
-    log('尚未連線或指令通道不存在', 'err');
+  if (!connected || !chars.cmd || !chars.scan) {
+    log('掃描功能不可用', 'err');
     return;
   }
   scanResults = [];
@@ -485,122 +667,9 @@ function setScanBusy(b) {
   }
 }
 
-btnConnect.addEventListener('click', async () => {
-  if (connected) {
-    disconnect();
-    return;
-  }
-  if (!navigator.bluetooth) return;
-  try {
-    setStatus('connecting', '掃描中...');
-    btnConnect.disabled = true;
-    log('開始搜尋 SmartGate 裝置 (名稱前綴 SG-)...', 'info');
-    device = await navigator.bluetooth.requestDevice({
-      filters: [{ namePrefix: 'SG-' }],
-      optionalServices: [SVC_UUID]
-    });
-    device.addEventListener('gattserverdisconnected', onDisconnected);
-    setStatus('connecting', `連線至 ${device.name} ...`);
-    log(`找到裝置：${device.name}，建立連線`, 'info');
-    server = await device.gatt.connect();
-    const svc = await server.getPrimaryService(SVC_UUID);
-
-    // 取得所有必要的特徵（使用正確 UUID）
-    chars.ssid     = await svc.getCharacteristic(SSID_UUID);
-    chars.pass     = await svc.getCharacteristic(PASS_UUID);
-    chars.cmd      = await svc.getCharacteristic(CMD_UUID);
-    chars.status   = await svc.getCharacteristic(STATUS_UUID);
-    chars.scan     = await svc.getCharacteristic(SCAN_UUID);
-    chars.mqttUser = await svc.getCharacteristic(MQTT_USER_UUID);
-    chars.mqttPass = await svc.getCharacteristic(MQTT_PASS_UUID);
-    chars.devId    = await svc.getCharacteristic(DEV_ID_UUID);
-    chars.email    = await svc.getCharacteristic(EMAIL_UUID);
-    chars.serverNo = await svc.getCharacteristic(SERVER_NO_UUID);
-
-    const dec = new TextDecoder();
-    // 讀取目前 SSID
-    try {
-      const rawSsid = await chars.ssid.readValue();
-      currentSsid = dec.decode(rawSsid).trim();
-      if (currentSsid) log(`目前裝置 SSID：${currentSsid}`, 'ok');
-    } catch(e) { currentSsid = ''; }
-
-    // 讀取供裝欄位現有值
-    try {
-      const mqttUserVal = await chars.mqttUser.readValue();
-      $('mqttUser').value = dec.decode(mqttUserVal).trim();
-    } catch(e) { $('mqttUser').value = ''; }
-    try {
-      const mqttPassVal = await chars.mqttPass.readValue();
-      $('mqttPass').value = dec.decode(mqttPassVal).trim();
-    } catch(e) { $('mqttPass').value = ''; }
-    try {
-      const devIdVal = await chars.devId.readValue();
-      $('deviceId').value = dec.decode(devIdVal).trim();
-    } catch(e) { $('deviceId').value = ''; }
-    try {
-      const emailVal = await chars.email.readValue();
-      $('userEmail').value = dec.decode(emailVal).trim();
-    } catch(e) { $('userEmail').value = ''; }
-    try {
-      const svNoVal = await chars.serverNo.readValue();
-      $('serverNo').value = dec.decode(svNoVal).trim();
-    } catch(e) { $('serverNo').value = ''; }
-
-    // 訂閱狀態通知
-    await chars.status.startNotifications();
-    chars.status.addEventListener('characteristicvaluechanged', e => {
-      const msg = dec.decode(e.target.value);
-      if (msg === 'APPLYING') {
-        log('裝置儲存設定中，即將重啟...', 'warn');
-        btnSend.disabled = true;
-      } else if (msg.startsWith('ERROR')) {
-        log(`裝置回報錯誤：${msg}`, 'err');
-      }
-    });
-
-    // 訂閱掃描結果
-    await chars.scan.startNotifications();
-    chars.scan.addEventListener('characteristicvaluechanged', e => {
-      const raw = dec.decode(e.target.value).trim();
-      if (raw.startsWith('SCAN_DONE:')) {
-        const cnt = parseInt(raw.split(':')[1]) || 0;
-        log(`掃描完成，共 ${cnt} 個網路`, 'ok');
-        setScanBusy(false);
-        buildDropdown();
-      } else if (raw !== 'IDLE' && !raw.startsWith('SCAN')) {
-        const parts = raw.split('|');
-        if (parts.length === 2) {
-          const ssid = parts[0];
-          const rssi = parseInt(parts[1]);
-          if (ssid && !scanResults.find(r => r.ssid === ssid)) {
-            scanResults.push({ ssid, rssi });
-          }
-        } else if (raw.length > 0 && !scanResults.find(r => r.ssid === raw)) {
-          if (!raw.includes('|')) scanResults.push({ ssid: raw, rssi: 0 });
-        }
-      }
-    });
-
-    connected = true;
-    setStatus('connected', `已連線：${device.name}`);
-    btnConnect.textContent = '斷線';
-    btnConnect.disabled = false;
-    btnSend.disabled = false;
-    btnScan.disabled = false;
-    log('藍芽連線成功，開始自動掃描 WiFi ...', 'ok');
-    await doScan();
-  } catch (err) {
-    setStatus('error', '連線失敗');
-    log(`錯誤：${err.message}`, 'err');
-    btnConnect.disabled = false;
-    if (device && device.gatt) device.gatt.disconnect();
-    connected = false;
-  }
-});
-
 btnScan.addEventListener('click', doScan);
 
+// 套用設定
 btnSend.addEventListener('click', async () => {
   const ssid = getSSID();
   const pass = passInput.value;
@@ -622,31 +691,43 @@ btnSend.addEventListener('click', async () => {
     await chars.pass.writeValue(enc.encode(pass));
     await sleep(300);
 
-    const mqttUser = $('mqttUser').value.trim();
-    if (mqttUser) {
-      await chars.mqttUser.writeValue(enc.encode(mqttUser));
-      await sleep(200);
+    // 僅寫入存在的供裝特徵
+    if (chars.mqttUser) {
+      const val = $('mqttUser').value.trim();
+      if (val) {
+        await chars.mqttUser.writeValue(enc.encode(val));
+        await sleep(200);
+      }
     }
-    const mqttPass = $('mqttPass').value;
-    if (mqttPass) {
-      await chars.mqttPass.writeValue(enc.encode(mqttPass));
-      await sleep(200);
+    if (chars.mqttPass) {
+      const val = $('mqttPass').value;
+      if (val) {
+        await chars.mqttPass.writeValue(enc.encode(val));
+        await sleep(200);
+      }
     }
-    const devId = $('deviceId').value.trim();
-    if (devId) {
-      await chars.devId.writeValue(enc.encode(devId));
-      await sleep(200);
+    if (chars.devId) {
+      const val = $('deviceId').value.trim();
+      if (val) {
+        await chars.devId.writeValue(enc.encode(val));
+        await sleep(200);
+      }
     }
-    const email = $('userEmail').value.trim();
-    if (email) {
-      await chars.email.writeValue(enc.encode(email));
-      await sleep(200);
+    if (chars.email) {
+      const val = $('userEmail').value.trim();
+      if (val) {
+        await chars.email.writeValue(enc.encode(val));
+        await sleep(200);
+      }
     }
-    const serverNo = $('serverNo').value.trim();
-    if (serverNo) {
-      await chars.serverNo.writeValue(enc.encode(serverNo));
-      await sleep(200);
+    if (chars.serverNo) {
+      const val = $('serverNo').value.trim();
+      if (val) {
+        await chars.serverNo.writeValue(enc.encode(val));
+        await sleep(200);
+      }
     }
+
     log('發送 apply 指令，裝置將儲存並重啟 ...', 'info');
     await chars.cmd.writeValue(enc.encode('apply'));
     log('指令已送出！裝置重啟後會套用新 WiFi 與供裝設定', 'ok');
@@ -659,6 +740,7 @@ btnSend.addEventListener('click', async () => {
   }
 });
 
+// 密碼顯示切換
 function toggleEye(fieldId, iconId) {
   const inp = document.getElementById(fieldId);
   const icon = document.getElementById(iconId);
