@@ -299,6 +299,9 @@
 </style>
 </head>
 <body>
+<script>
+const UI_VERSION = 'WEB-2026-05-04b';
+</script>
 <header>
   <div class="logo">
     <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round">
@@ -307,7 +310,7 @@
   </div>
   <div>
     <h1>SmartGate 設定</h1>
-    <p>透過藍芽變更裝置連線與供裝設定</p>
+    <p>透過藍芽變更裝置連線與供裝設定 · WEB-2026-05-04b</p>
   </div>
 </header>
 
@@ -576,6 +579,7 @@ function applyInfoPayload(raw, sourceLabel = '整包資訊') {
   if (!raw) return false;
   try {
     const info = JSON.parse(raw);
+    if (info.fw) log(`${sourceLabel} 韌體版本：${info.fw}`, 'info');
     if (info.ssid) currentSsid = String(info.ssid).trim();
     fillFieldIfEmpty('mqttUser', info.mqttUser);
     fillFieldIfEmpty('mqttPass', info.mqttPass);
@@ -606,6 +610,7 @@ btnConnect.addEventListener('click', async () => {
   }
   if (!navigator.bluetooth) return;
   try {
+    log(`網頁版本：${UI_VERSION}`, 'info');
     setStatus('connecting', '掃描中...');
     btnConnect.disabled = true;
     log('開始掃描 SmartGate 裝置...', 'info');
