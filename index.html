@@ -603,6 +603,50 @@ function applyInfoPayload(raw, sourceLabel = '整包資訊') {
   }
 }
 
+function applyStatusSnapshot(msg) {
+  const parts = String(msg || '').split(':');
+  if (parts.length < 2) return false;
+  const key = parts.shift();
+  const value = parts.join(':').trim();
+  if (!value) return false;
+
+  if (key === 'FW') {
+    log(`狀態韌體版本：${value}`, 'info');
+    return true;
+  }
+  if (key === 'SSID') {
+    currentSsid = value;
+    log(`韌體 SSID：${value}`, 'ok');
+    return true;
+  }
+  if (key === 'MQUSER') {
+    $('mqttUser').value = value;
+    log(`韌體 MQTT User：${value}`, 'ok');
+    return true;
+  }
+  if (key === 'DEVID') {
+    $('deviceId').value = value;
+    log(`韌體 Device ID：${value}`, 'ok');
+    return true;
+  }
+  if (key === 'DEVNAME') {
+    $('deviceName').value = value;
+    log(`韌體 Device Name：${value}`, 'ok');
+    return true;
+  }
+  if (key === 'SERVERNO') {
+    $('serverNo').value = value;
+    log(`韌體 Server No：${value}`, 'ok');
+    return true;
+  }
+  if (key === 'NETINFO') {
+    updateNetInfo(value);
+    log(`韌體 IP：${value.split('|')[1] || value}`, 'ok');
+    return true;
+  }
+  return false;
+}
+
 btnConnect.addEventListener('click', async () => {
   if (connected) {
     disconnect();
@@ -673,6 +717,7 @@ btnConnect.addEventListener('click', async () => {
 
     await startNotifyIfPresent(chars.status, e => {
       const msg = dec.decode(e.target.value);
+      if (applyStatusSnapshot(msg)) return;
       if (msg === 'APPLYING') {
         log('裝置儲存設定中，正在套用...', 'warn');
         btnSend.disabled = true;
