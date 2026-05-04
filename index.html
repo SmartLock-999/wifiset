@@ -434,6 +434,7 @@ const DEV_NAME_UUID  = '12345678-1234-5678-1234-56789abcde04';
 const EMAIL_UUID     = '12345678-1234-5678-1234-56789abcde05';
 const SERVER_NO_UUID = '12345678-1234-5678-1234-56789abcde06';
 const NETINFO_UUID   = '12345678-1234-5678-1234-56789abcde07';
+const INFO_UUID      = '12345678-1234-5678-1234-56789abcde08';
 
 let device, server, chars = {}, connected = false, scanResults = [], currentSsid = '';
 const $ = id => document.getElementById(id);
@@ -532,7 +533,6 @@ async function getOptionalChar(svc, uuid, label, required = false) {
     return await svc.getCharacteristic(uuid);
   } catch (err) {
     if (required) throw err;
-    log(`未提供 ${label} 特徵值`, 'warn');
     return null;
   }
 }
@@ -554,7 +554,6 @@ async function readTextChar(charObj, fieldId, label, options = {}) {
 
 async function startNotifyIfPresent(charObj, onValue, label) {
   if (!charObj) {
-    if (label) log(`${label} 通知未提供`, 'warn');
     return false;
   }
   try {
@@ -563,6 +562,39 @@ async function startNotifyIfPresent(charObj, onValue, label) {
     return true;
   } catch (err) {
     log(`${label} 通知啟動失敗：${err.message}`, 'warn');
+    return false;
+  }
+}
+
+function fillFieldIfEmpty(fieldId, value) {
+  if (value === undefined || value === null) return;
+  const el = $(fieldId);
+  if (!el.value.trim()) el.value = String(value).trim();
+}
+
+function applyInfoPayload(raw, sourceLabel = '整包資訊') {
+  if (!raw) return false;
+  try {
+    const info = JSON.parse(raw);
+    if (info.ssid) currentSsid = String(info.ssid).trim();
+    fillFieldIfEmpty('mqttUser', info.mqttUser);
+    fillFieldIfEmpty('mqttPass', info.mqttPass);
+    fillFieldIfEmpty('deviceId', info.deviceId);
+    fillFieldIfEmpty('deviceName', info.deviceName);
+    fillFieldIfEmpty('userEmail', info.email);
+    fillFieldIfEmpty('serverNo', info.serverNo);
+    if (info.netInfo) updateNetInfo(String(info.netInfo).trim());
+
+    if (info.ssid) log(`${sourceLabel} SSID：${info.ssid}`, 'ok');
+    if (info.mqttUser) log(`${sourceLabel} MQTT User：${info.mqttUser}`, 'ok');
+    if (info.deviceId) log(`${sourceLabel} Device ID：${info.deviceId}`, 'ok');
+    if (info.deviceName) log(`${sourceLabel} Device Name：${info.deviceName}`, 'ok');
+    if (info.email) log(`${sourceLabel} Email：${info.email}`, 'ok');
+    if (info.serverNo) log(`${sourceLabel} Server No：${info.serverNo}`, 'ok');
+    if (info.netInfo) log(`${sourceLabel} IP：${String(info.netInfo).split('|')[1] || info.netInfo}`, 'ok');
+    return true;
+  } catch (err) {
+    log(`整包資訊解析失敗：${err.message}`, 'warn');
     return false;
   }
 }
@@ -598,22 +630,38 @@ btnConnect.addEventListener('click', async () => {
     chars.email    = await getOptionalChar(svc, EMAIL_UUID, 'Email');
     chars.serverNo = await getOptionalChar(svc, SERVER_NO_UUID, 'Server No');
     chars.netInfo  = await getOptionalChar(svc, NETINFO_UUID, 'NetInfo');
+    chars.info     = await getOptionalChar(svc, INFO_UUID, 'Info');
 
     const dec = new TextDecoder();
+    let infoLoaded = false;
+    const infoPayload = await readTextChar(chars.info, null, '整包資訊');
+    if (infoPayload) infoLoaded = applyInfoPayload(infoPayload, '韌體');
     currentSsid = await readTextChar(chars.ssid, null, '目前 SSID');
-    await readTextChar(chars.mqttUser, 'mqttUser', 'MQTT User');
-    await readTextChar(chars.mqttPass, 'mqttPass', 'MQTT Pass', { mask: true });
-    await readTextChar(chars.devId, 'deviceId', 'Device ID');
-    await readTextChar(chars.devName, 'deviceName', 'Device Name');
-    await readTextChar(chars.email, 'userEmail', 'Email');
-    await readTextChar(chars.serverNo, 'serverNo', 'Server No');
+    if (!infoLoaded || !$('mqttUser').value.trim()) {
+      await readTextChar(chars.mqttUser, 'mqttUser', 'MQTT User');
+    }
+    if (!infoLoaded || !$('mqttPass').value.trim()) {
+      await readTextChar(chars.mqttPass, 'mqttPass', 'MQTT Pass', { mask: true });
+    }
+    if (!infoLoaded || !$('deviceId').value.trim()) {
+      await readTextChar(chars.devId, 'deviceId', 'Device ID');
+    }
+    if (!infoLoaded || !$('deviceName').value.trim()) {
+      await readTextChar(chars.devName, 'deviceName', 'Device Name');
+    }
+    if (!infoLoaded || !$('userEmail').value.trim()) {
+      await readTextChar(chars.email, 'userEmail', 'Email');
+    }
+    if (!infoLoaded || !$('serverNo').value.trim()) {
+      await readTextChar(chars.serverNo, 'serverNo', 'Server No');
+    }
     const netInfo = await readTextChar(chars.netInfo, null, '目前供裝位址');
     if (netInfo) {
       updateNetInfo(netInfo);
     } else if (currentSsid) {
-      setAccess('OFF', '');
-      accessHint.textContent = '韌體尚未回報目前 IP 位址；若裝置在 AP 模式，請先用 192.168.4.1。';
-      log('尚未取得目前供裝 IP，BLE 仍可正常使用。', 'warn');
+      setAccess('AP', '192.168.4.1');
+      accessHint.textContent = '未收到即時 NetInfo，先預設使用 192.168.4.1；若已連上 WiFi，再重新讀取。';
+      log('尚未取得即時 IP，先使用 192.168.4.1 作為供裝位址。', 'warn');
     }
 
     if (currentSsid) log(`裝置目前 SSID：${currentSsid}`, 'ok');
@@ -660,6 +708,9 @@ btnConnect.addEventListener('click', async () => {
     await startNotifyIfPresent(chars.netInfo, e => {
       updateNetInfo(dec.decode(e.target.value).trim());
     }, 'NetInfo');
+    await startNotifyIfPresent(chars.info, e => {
+      applyInfoPayload(dec.decode(e.target.value).trim(), '通知');
+    }, 'Info');
 
     connected = true;
     setStatus('connected', `已連線：${device.name}`);
