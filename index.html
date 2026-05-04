@@ -249,14 +249,6 @@
     line-height: 1.6;
     text-align: center;
   }
-  .note-warning {
-    font-size: 0.7rem;
-    background: #1e1a2a;
-    border-left: 3px solid var(--warn);
-    padding: 8px 10px;
-    border-radius: 6px;
-    margin-top: 6px;
-  }
 </style>
 </head>
 <body>
@@ -356,10 +348,6 @@
 
   <button class="btn btn-primary" id="btnSend" disabled>套用並重啟裝置</button>
 
-  <div class="note-warning">
-    💡 修正UUID對應：已更新為裝置實際使用的特徵位址 (結尾01~0a)，解決「No Characteristics found」錯誤。
-  </div>
-
   <hr>
   <div>
     <div class="label" style="margin-bottom:8px">操作記錄</div>
@@ -370,28 +358,18 @@
 </div>
 
 <script>
-// ==================== 修正版 UUID ====================
-// 依據錯誤訊息「找不到 Characteristics UUID ...abcdef01」調整完全匹配裝置韌體
-// 服務 UUID 維持原廠標準
+// ==================== 正確版 UUID（對應裝置韌體） ====================
 const SVC_UUID    = '12345678-1234-5678-1234-56789abcdef0';
-
-// 後綴規則：基底前綴 + 12位元最後段前10碼固定為 '56789abcde'，最後兩位序號 (01,02,...0a)
-const BASE_PREFIX = '12345678-1234-5678-1234-';
-const COMMON_TAIL = '56789abcde';   // 固定10個字元 (與服務UUID前10碼相同)
-
-// WiFi 相關 + 指令 / 狀態 / 掃描 (01~05)
-const SSID_UUID   = BASE_PREFIX + COMMON_TAIL + '01';   // ...56789abcde01
-const PASS_UUID   = BASE_PREFIX + COMMON_TAIL + '02';
-const CMD_UUID    = BASE_PREFIX + COMMON_TAIL + '03';
-const STATUS_UUID = BASE_PREFIX + COMMON_TAIL + '04';
-const SCAN_UUID   = BASE_PREFIX + COMMON_TAIL + '05';
-
-// 供裝相關 (06~0a)
-const MQTT_USER_UUID = BASE_PREFIX + COMMON_TAIL + '06';
-const MQTT_PASS_UUID = BASE_PREFIX + COMMON_TAIL + '07';
-const DEV_ID_UUID    = BASE_PREFIX + COMMON_TAIL + '08';
-const EMAIL_UUID     = BASE_PREFIX + COMMON_TAIL + '09';
-const SERVER_NO_UUID = BASE_PREFIX + COMMON_TAIL + '10';  // 0a 但為可讀使用10 (16進位10 = 16但僅標示two digits)
+const SSID_UUID   = '12345678-1234-5678-1234-56789abcdef1';
+const PASS_UUID   = '12345678-1234-5678-1234-56789abcdef2';
+const CMD_UUID    = '12345678-1234-5678-1234-56789abcdef3';
+const STATUS_UUID = '12345678-1234-5678-1234-56789abcdef4';
+const SCAN_UUID   = '12345678-1234-5678-1234-56789abcdef5';
+const MQTT_USER_UUID = '12345678-1234-5678-1234-56789abcde01';
+const MQTT_PASS_UUID = '12345678-1234-5678-1234-56789abcde02';
+const DEV_ID_UUID    = '12345678-1234-5678-1234-56789abcde03';
+const EMAIL_UUID     = '12345678-1234-5678-1234-56789abcde05';
+const SERVER_NO_UUID = '12345678-1234-5678-1234-56789abcde06';
 
 // 全局狀態
 let device, server, chars = {}, connected = false, scanResults = [], currentSsid = '';
@@ -412,7 +390,6 @@ function log(msg, type = '') {
   logWrap.scrollTop = logWrap.scrollHeight;
 }
 
-// 下拉選單重建 (包含目前設定值)
 function buildDropdown() {
   ssidSelect.innerHTML = '';
   if (currentSsid && !scanResults.find(r => r.ssid === currentSsid)) {
@@ -458,7 +435,6 @@ function setStatus(s, t) {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// 斷線處理
 function onDisconnected() {
   connected = false;
   setStatus('', '已斷線');
@@ -479,7 +455,6 @@ function disconnect() {
   if (device && device.gatt.connected) device.gatt.disconnect();
 }
 
-// 掃描WiFi (透過特徵寫入 scan 指令)
 async function doScan() {
   if (!connected || !chars.cmd) {
     log('尚未連線或指令通道不存在', 'err');
@@ -510,7 +485,6 @@ function setScanBusy(b) {
   }
 }
 
-// 主要連線邏輯 (修正後UUID)
 btnConnect.addEventListener('click', async () => {
   if (connected) {
     disconnect();
@@ -530,8 +504,8 @@ btnConnect.addEventListener('click', async () => {
     log(`找到裝置：${device.name}，建立連線`, 'info');
     server = await device.gatt.connect();
     const svc = await server.getPrimaryService(SVC_UUID);
-    
-    // 取得所有需要的特徵 (使用新式 UUID)
+
+    // 取得所有必要的特徵（使用正確 UUID）
     chars.ssid     = await svc.getCharacteristic(SSID_UUID);
     chars.pass     = await svc.getCharacteristic(PASS_UUID);
     chars.cmd      = await svc.getCharacteristic(CMD_UUID);
@@ -542,16 +516,16 @@ btnConnect.addEventListener('click', async () => {
     chars.devId    = await svc.getCharacteristic(DEV_ID_UUID);
     chars.email    = await svc.getCharacteristic(EMAIL_UUID);
     chars.serverNo = await svc.getCharacteristic(SERVER_NO_UUID);
-    
+
     const dec = new TextDecoder();
-    // 讀取目前 WiFi SSID (若有)
+    // 讀取目前 SSID
     try {
       const rawSsid = await chars.ssid.readValue();
       currentSsid = dec.decode(rawSsid).trim();
       if (currentSsid) log(`目前裝置 SSID：${currentSsid}`, 'ok');
     } catch(e) { currentSsid = ''; }
-    
-    // 讀取供裝欄位現有值 (供顯示)
+
+    // 讀取供裝欄位現有值
     try {
       const mqttUserVal = await chars.mqttUser.readValue();
       $('mqttUser').value = dec.decode(mqttUserVal).trim();
@@ -572,8 +546,8 @@ btnConnect.addEventListener('click', async () => {
       const svNoVal = await chars.serverNo.readValue();
       $('serverNo').value = dec.decode(svNoVal).trim();
     } catch(e) { $('serverNo').value = ''; }
-    
-    // 訂閱狀態通知 (重啟或錯誤)
+
+    // 訂閱狀態通知
     await chars.status.startNotifications();
     chars.status.addEventListener('characteristicvaluechanged', e => {
       const msg = dec.decode(e.target.value);
@@ -582,12 +556,10 @@ btnConnect.addEventListener('click', async () => {
         btnSend.disabled = true;
       } else if (msg.startsWith('ERROR')) {
         log(`裝置回報錯誤：${msg}`, 'err');
-      } else if (msg === 'IDLE') {
-        // 閒置
       }
     });
-    
-    // 訂閱掃描結果 (SCAN_UUID 使用通知)
+
+    // 訂閱掃描結果
     await chars.scan.startNotifications();
     chars.scan.addEventListener('characteristicvaluechanged', e => {
       const raw = dec.decode(e.target.value).trim();
@@ -597,7 +569,6 @@ btnConnect.addEventListener('click', async () => {
         setScanBusy(false);
         buildDropdown();
       } else if (raw !== 'IDLE' && !raw.startsWith('SCAN')) {
-        // 格式預期 "SSID名稱|RSSI"
         const parts = raw.split('|');
         if (parts.length === 2) {
           const ssid = parts[0];
@@ -606,12 +577,11 @@ btnConnect.addEventListener('click', async () => {
             scanResults.push({ ssid, rssi });
           }
         } else if (raw.length > 0 && !scanResults.find(r => r.ssid === raw)) {
-          // 若僅回傳名稱無訊號強度 (寬容)
           if (!raw.includes('|')) scanResults.push({ ssid: raw, rssi: 0 });
         }
       }
     });
-    
+
     connected = true;
     setStatus('connected', `已連線：${device.name}`);
     btnConnect.textContent = '斷線';
@@ -631,7 +601,6 @@ btnConnect.addEventListener('click', async () => {
 
 btnScan.addEventListener('click', doScan);
 
-// 套用設定並重啟
 btnSend.addEventListener('click', async () => {
   const ssid = getSSID();
   const pass = passInput.value;
@@ -652,7 +621,7 @@ btnSend.addEventListener('click', async () => {
     log(`設定 WiFi 密碼 (長度:${pass.length})`, 'info');
     await chars.pass.writeValue(enc.encode(pass));
     await sleep(300);
-    
+
     const mqttUser = $('mqttUser').value.trim();
     if (mqttUser) {
       await chars.mqttUser.writeValue(enc.encode(mqttUser));
@@ -681,7 +650,6 @@ btnSend.addEventListener('click', async () => {
     log('發送 apply 指令，裝置將儲存並重啟 ...', 'info');
     await chars.cmd.writeValue(enc.encode('apply'));
     log('指令已送出！裝置重啟後會套用新 WiFi 與供裝設定', 'ok');
-    // 不立即啟用按鍵，自動等待斷線或5秒後恢復
     setTimeout(() => {
       if (connected) btnSend.disabled = false;
     }, 5000);
@@ -691,7 +659,6 @@ btnSend.addEventListener('click', async () => {
   }
 });
 
-// 密碼顯示切換
 function toggleEye(fieldId, iconId) {
   const inp = document.getElementById(fieldId);
   const icon = document.getElementById(iconId);
