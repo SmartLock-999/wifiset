@@ -527,6 +527,31 @@ btnOpenConfig.addEventListener('click', () => {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+async function getOptionalChar(svc, uuid, label, required = false) {
+  try {
+    return await svc.getCharacteristic(uuid);
+  } catch (err) {
+    if (required) throw err;
+    log(`未提供 ${label} 特徵值`, 'warn');
+    return null;
+  }
+}
+
+async function readTextChar(charObj, fieldId, label, options = {}) {
+  if (!charObj) return '';
+  try {
+    const value = new TextDecoder().decode(await charObj.readValue()).trim();
+    if (fieldId) $(fieldId).value = value;
+    if (value) {
+      log(`${label}：${options.mask ? '已載入' : value}`, 'ok');
+    }
+    return value;
+  } catch (err) {
+    log(`${label} 讀取失敗：${err.message}`, 'warn');
+    return '';
+  }
+}
+
 btnConnect.addEventListener('click', async () => {
   if (connected) {
     disconnect();
@@ -546,27 +571,29 @@ btnConnect.addEventListener('click', async () => {
     log(`找到：${device.name}，連線中...`, 'info');
     server = await device.gatt.connect();
     const svc = await server.getPrimaryService(SVC_UUID);
-    chars.ssid     = await svc.getCharacteristic(SSID_UUID);
-    chars.pass     = await svc.getCharacteristic(PASS_UUID);
-    chars.cmd      = await svc.getCharacteristic(CMD_UUID);
-    chars.status   = await svc.getCharacteristic(STATUS_UUID);
-    chars.scan     = await svc.getCharacteristic(SCAN_UUID);
-    chars.mqttUser = await svc.getCharacteristic(MQTT_USER_UUID);
-    chars.mqttPass = await svc.getCharacteristic(MQTT_PASS_UUID);
-    chars.devId    = await svc.getCharacteristic(DEV_ID_UUID);
-    chars.devName  = await svc.getCharacteristic(DEV_NAME_UUID);
-    chars.email    = await svc.getCharacteristic(EMAIL_UUID);
-    chars.serverNo = await svc.getCharacteristic(SERVER_NO_UUID);
-    chars.netInfo  = await svc.getCharacteristic(NETINFO_UUID);
+    chars.ssid     = await getOptionalChar(svc, SSID_UUID, 'SSID', true);
+    chars.pass     = await getOptionalChar(svc, PASS_UUID, 'WiFi 密碼', true);
+    chars.cmd      = await getOptionalChar(svc, CMD_UUID, '命令', true);
+    chars.status   = await getOptionalChar(svc, STATUS_UUID, '狀態', true);
+    chars.scan     = await getOptionalChar(svc, SCAN_UUID, '掃描', true);
+    chars.mqttUser = await getOptionalChar(svc, MQTT_USER_UUID, 'MQTT User');
+    chars.mqttPass = await getOptionalChar(svc, MQTT_PASS_UUID, 'MQTT Pass');
+    chars.devId    = await getOptionalChar(svc, DEV_ID_UUID, 'Device ID');
+    chars.devName  = await getOptionalChar(svc, DEV_NAME_UUID, 'Device Name');
+    chars.email    = await getOptionalChar(svc, EMAIL_UUID, 'Email');
+    chars.serverNo = await getOptionalChar(svc, SERVER_NO_UUID, 'Server No');
+    chars.netInfo  = await getOptionalChar(svc, NETINFO_UUID, 'NetInfo');
 
     const dec = new TextDecoder();
-    try { currentSsid = dec.decode(await chars.ssid.readValue()).trim(); } catch (e) {}
-    try { $('mqttUser').value = dec.decode(await chars.mqttUser.readValue()).trim(); } catch (e) {}
-    try { $('deviceId').value = dec.decode(await chars.devId.readValue()).trim(); } catch (e) {}
-    try { $('deviceName').value = dec.decode(await chars.devName.readValue()).trim(); } catch (e) {}
-    try { $('userEmail').value = dec.decode(await chars.email.readValue()).trim(); } catch (e) {}
-    try { $('serverNo').value = dec.decode(await chars.serverNo.readValue()).trim(); } catch (e) {}
-    try { updateNetInfo(dec.decode(await chars.netInfo.readValue()).trim()); } catch (e) {}
+    currentSsid = await readTextChar(chars.ssid, null, '目前 SSID');
+    await readTextChar(chars.mqttUser, 'mqttUser', 'MQTT User');
+    await readTextChar(chars.mqttPass, 'mqttPass', 'MQTT Pass', { mask: true });
+    await readTextChar(chars.devId, 'deviceId', 'Device ID');
+    await readTextChar(chars.devName, 'deviceName', 'Device Name');
+    await readTextChar(chars.email, 'userEmail', 'Email');
+    await readTextChar(chars.serverNo, 'serverNo', 'Server No');
+    const netInfo = await readTextChar(chars.netInfo, null, '目前供裝位址');
+    if (netInfo) updateNetInfo(netInfo);
 
     if (currentSsid) log(`裝置目前 SSID：${currentSsid}`, 'ok');
 
