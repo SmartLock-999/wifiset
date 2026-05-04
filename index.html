@@ -552,6 +552,21 @@ async function readTextChar(charObj, fieldId, label, options = {}) {
   }
 }
 
+async function startNotifyIfPresent(charObj, onValue, label) {
+  if (!charObj) {
+    if (label) log(`${label} 通知未提供`, 'warn');
+    return false;
+  }
+  try {
+    await charObj.startNotifications();
+    charObj.addEventListener('characteristicvaluechanged', onValue);
+    return true;
+  } catch (err) {
+    log(`${label} 通知啟動失敗：${err.message}`, 'warn');
+    return false;
+  }
+}
+
 btnConnect.addEventListener('click', async () => {
   if (connected) {
     disconnect();
@@ -593,12 +608,17 @@ btnConnect.addEventListener('click', async () => {
     await readTextChar(chars.email, 'userEmail', 'Email');
     await readTextChar(chars.serverNo, 'serverNo', 'Server No');
     const netInfo = await readTextChar(chars.netInfo, null, '目前供裝位址');
-    if (netInfo) updateNetInfo(netInfo);
+    if (netInfo) {
+      updateNetInfo(netInfo);
+    } else if (currentSsid) {
+      setAccess('OFF', '');
+      accessHint.textContent = '韌體尚未回報目前 IP 位址；若裝置在 AP 模式，請先用 192.168.4.1。';
+      log('尚未取得目前供裝 IP，BLE 仍可正常使用。', 'warn');
+    }
 
     if (currentSsid) log(`裝置目前 SSID：${currentSsid}`, 'ok');
 
-    await chars.status.startNotifications();
-    chars.status.addEventListener('characteristicvaluechanged', e => {
+    await startNotifyIfPresent(chars.status, e => {
       const msg = dec.decode(e.target.value);
       if (msg === 'APPLYING') {
         log('裝置儲存設定中，正在套用...', 'warn');
@@ -619,10 +639,9 @@ btnConnect.addEventListener('click', async () => {
         log(`裝置錯誤：${msg}`, 'err');
         btnSend.disabled = false;
       }
-    });
+    }, '狀態');
 
-    await chars.scan.startNotifications();
-    chars.scan.addEventListener('characteristicvaluechanged', e => {
+    await startNotifyIfPresent(chars.scan, e => {
       const raw = dec.decode(e.target.value).trim();
       if (raw.startsWith('SCAN_DONE:')) {
         const cnt = parseInt(raw.split(':')[1]) || 0;
@@ -636,12 +655,11 @@ btnConnect.addEventListener('click', async () => {
           if (ssid && !scanResults.find(r => r.ssid === ssid)) scanResults.push({ ssid, rssi });
         }
       }
-    });
+    }, '掃描');
 
-    await chars.netInfo.startNotifications();
-    chars.netInfo.addEventListener('characteristicvaluechanged', e => {
+    await startNotifyIfPresent(chars.netInfo, e => {
       updateNetInfo(dec.decode(e.target.value).trim());
-    });
+    }, 'NetInfo');
 
     connected = true;
     setStatus('connected', `已連線：${device.name}`);
