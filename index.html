@@ -680,6 +680,28 @@ async function refreshRuntimeState() {
   }
 }
 
+async function writeCharIfPresent(charObj, label, value, options = {}) {
+  const {
+    skipIfEmpty = false,
+    maskValue = false,
+    delayMs = 200
+  } = options;
+
+  if (skipIfEmpty && !String(value || '').length) {
+    return { ok: true, skipped: true };
+  }
+  if (!charObj) {
+    log(`${label} 欄位目前裝置未提供寫入 characteristic，已略過`, 'warn');
+    return { ok: false, missing: true };
+  }
+
+  const enc = new TextEncoder();
+  log(`${label}：${maskValue ? '已寫入' : value}`, 'info');
+  await charObj.writeValue(enc.encode(value));
+  await sleep(delayMs);
+  return { ok: true, skipped: false };
+}
+
 btnConnect.addEventListener('click', async () => {
   if (connected) {
     disconnect();
@@ -837,27 +859,24 @@ btnSend.addEventListener('click', async () => {
   if (!connected) { log('請先連線至裝置', 'err'); return; }
   try {
     btnSend.disabled = true;
-    const enc = new TextEncoder();
-    log(`傳送 SSID：${ssid}`, 'info');
-    await chars.ssid.writeValue(enc.encode(ssid)); await sleep(300);
-    log('傳送 WiFi 密碼...', 'info');
-    await chars.pass.writeValue(enc.encode(pass)); await sleep(300);
+    await writeCharIfPresent(chars.ssid, '傳送 SSID', ssid, { delayMs: 300 });
+    await writeCharIfPresent(chars.pass, '傳送 WiFi 密碼', pass, { maskValue: true, delayMs: 300 });
 
     const mqttUser = $('mqttUser').value.trim();
-    if (mqttUser) { await chars.mqttUser.writeValue(enc.encode(mqttUser)); await sleep(200); }
+    await writeCharIfPresent(chars.mqttUser, '傳送設備帳號', mqttUser, { skipIfEmpty: true });
     const mqttPass = $('mqttPass').value;
-    if (mqttPass) { await chars.mqttPass.writeValue(enc.encode(mqttPass)); await sleep(200); }
+    await writeCharIfPresent(chars.mqttPass, '傳送設備密碼', mqttPass, { skipIfEmpty: true, maskValue: true });
     const devId = $('deviceId').value.trim();
-    if (devId) { await chars.devId.writeValue(enc.encode(devId)); await sleep(200); }
+    await writeCharIfPresent(chars.devId, '傳送設備 ID', devId, { skipIfEmpty: true });
     const devName = $('deviceName').value.trim();
-    if (devName) { await chars.devName.writeValue(enc.encode(devName)); await sleep(200); }
+    await writeCharIfPresent(chars.devName, '傳送設備名稱', devName, { skipIfEmpty: true });
     const email = $('userEmail').value.trim();
-    if (email) { await chars.email.writeValue(enc.encode(email)); await sleep(200); }
+    await writeCharIfPresent(chars.email, '傳送註冊 Email', email, { skipIfEmpty: true });
     const serverNo = $('serverNo').value.trim();
-    if (serverNo) { await chars.serverNo.writeValue(enc.encode(serverNo)); await sleep(200); }
+    await writeCharIfPresent(chars.serverNo, '傳送伺服器編號', serverNo, { skipIfEmpty: true });
 
     log('傳送 apply 指令...', 'info');
-    await chars.cmd.writeValue(enc.encode('apply'));
+    await writeCharIfPresent(chars.cmd, '傳送 apply 指令', 'apply', { delayMs: 0 });
     log('已送出！等待裝置回報最新網路狀態...', 'ok');
   } catch (err) { log(`傳送失敗：${err.message}`, 'err'); btnSend.disabled = false; }
 });
