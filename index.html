@@ -249,6 +249,8 @@
   .btn:disabled { opacity: 0.3; cursor: not-allowed; }
   .btn-primary { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #000; }
   .btn-secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  .btn-danger { background: rgba(255, 77, 106, 0.12); border: 1px solid rgba(255, 77, 106, 0.45); color: #ff8ea1; }
+  .btn-danger:hover:not(:disabled) { opacity: 0.92; }
 
   hr { border: none; border-top: 1px solid var(--border); }
 
@@ -408,6 +410,7 @@ const UI_VERSION = 'WEB-2026-05-05a';
   </div>
 
   <button class="btn btn-primary" id="btnSend" disabled>套用設定</button>
+  <button class="btn btn-danger" id="btnClearNvs" disabled>清除 NVS 紀錄</button>
 
   <hr>
   <div>
@@ -437,12 +440,14 @@ const INFO_UUID      = '12345678-1234-5678-1234-56789abcde08';
 
 let device, server, chars = {}, connected = false, scanResults = [], currentSsid = '';
 let applyDisconnectTimer = null;
+let clearNvsInProgress = false;
 const $ = id => document.getElementById(id);
 const dot = $('dot'), statusText = $('statusText'), btnConnect = $('btnConnect'),
       btnScan = $('btnScan'), btnSend = $('btnSend'), ssidSelect = $('ssidSelect'),
       customSsid = $('customSsid'), customWrap = $('customSsidWrap'),
       passInput = $('passInput'), logWrap = $('logWrap'), ssidHint = $('ssidHint'),
       modeBadge = $('modeBadge'), configUrl = $('configUrl'),
+      btnClearNvs = $('btnClearNvs'),
       accessHint = $('accessHint'), btnOpenConfig = $('btnOpenConfig');
 
 if (!navigator.bluetooth) $('noSupport').style.display = 'block';
@@ -797,6 +802,14 @@ btnConnect.addEventListener('click', async () => {
       if (msg === 'APPLYING') {
         log('裝置儲存設定中，正在套用...', 'warn');
         btnSend.disabled = true;
+      } else if (msg === 'CLEARING_NVS') {
+        clearApplyDisconnectTimer();
+        clearNvsInProgress = true;
+        btnSend.disabled = true;
+        btnClearNvs.disabled = true;
+        log('裝置正在清除 NVS 紀錄，稍後會自動重啟...', 'warn');
+      } else if (msg === 'NVS_CLEARED') {
+        log('NVS 紀錄已清除，裝置即將重啟並回到重新供裝狀態。', 'ok');
       } else if (msg === 'SAVED_RECONNECT') {
         log('設定已儲存，裝置正在切換 WiFi；離線期間可用 192.168.4.1 供裝。', 'warn');
         btnSend.disabled = false;
@@ -848,6 +861,7 @@ btnConnect.addEventListener('click', async () => {
     btnConnect.textContent = '斷線';
     btnConnect.disabled = false;
     btnSend.disabled = false;
+    btnClearNvs.disabled = false;
     btnScan.disabled = false;
     await refreshRuntimeState();
     log('連線成功！正在自動掃描附近 WiFi...', 'ok');
@@ -908,13 +922,37 @@ btnSend.addEventListener('click', async () => {
   } catch (err) { log(`傳送失敗：${err.message}`, 'err'); btnSend.disabled = false; }
 });
 
+btnClearNvs.addEventListener('click', async () => {
+  if (!connected) { log('請先連線至裝置', 'err'); return; }
+  const confirmed = window.confirm('確定要清除 ESP32 上的 NVS 紀錄嗎？\n\n這會刪除目前供裝資料，裝置會重新啟動，之後需重新設定 WiFi 與設備資訊。');
+  if (!confirmed) return;
+
+  try {
+    clearApplyDisconnectTimer();
+    clearNvsInProgress = true;
+    btnClearNvs.disabled = true;
+    btnSend.disabled = true;
+    log('傳送清除 NVS 指令...', 'warn');
+    await writeCharIfPresent(chars.cmd, '傳送清除 NVS 指令', 'clear_nvs', { delayMs: 0 });
+    log('已送出清除指令，等待裝置清空資料並重新啟動。', 'ok');
+  } catch (err) {
+    clearNvsInProgress = false;
+    btnClearNvs.disabled = false;
+    btnSend.disabled = false;
+    log(`清除 NVS 失敗：${err.message}`, 'err');
+  }
+});
+
 function onDisconnected() {
   connected = false;
   clearApplyDisconnectTimer();
+  const wasClearingNvs = clearNvsInProgress;
+  clearNvsInProgress = false;
   setStatus('', '已斷線');
   btnConnect.textContent = '連線';
   btnConnect.disabled = false;
   btnSend.disabled = true;
+  btnClearNvs.disabled = true;
   btnScan.disabled = true;
   ssidSelect.innerHTML = '<option value="">── 請先連線裝置 ──</option>';
   ssidSelect.disabled = true;
@@ -922,7 +960,7 @@ function onDisconnected() {
   ssidHint.style.display = 'none';
   setScanBusy(false);
   setAccess('OFF', '');
-  log('BLE 連線已中斷', 'warn');
+  log(wasClearingNvs ? 'BLE 連線已中斷，裝置應已清除資料並重啟，請重新連線後再設定。' : 'BLE 連線已中斷', 'warn');
 }
 
 function disconnect() {
