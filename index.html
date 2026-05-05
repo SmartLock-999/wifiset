@@ -392,13 +392,9 @@ const UI_VERSION = 'WEB-2026-05-05a';
   </div>
 
   <div class="field">
-    <div class="label">設備 ID</div>
-    <input type="text" class="form-control" id="deviceId" placeholder="例：大門、車庫" autocomplete="off">
-  </div>
-
-  <div class="field">
     <div class="label">設備名稱</div>
-    <input type="text" class="form-control" id="deviceName" placeholder="例：家用大門" autocomplete="off">
+    <input type="text" class="form-control" id="deviceId" placeholder="例：大門、車庫、側門" autocomplete="off">
+    <div class="hint">比照 `192.168.4.1` 供裝頁，此欄會同步寫入 Device ID 與 Device Name。</div>
   </div>
 
   <div class="field">
@@ -588,24 +584,29 @@ function setFieldValue(fieldId, value, options = {}) {
   el.value = nextValue;
 }
 
+function getProvisioningDeviceName(info = {}) {
+  const deviceName = String(info.deviceName || '').trim();
+  const deviceId = String(info.deviceId || '').trim();
+  return deviceName || deviceId;
+}
+
 function applyInfoPayload(raw, sourceLabel = '整包資訊') {
   if (!raw) return false;
   try {
     const info = JSON.parse(raw);
+    const provisioningDeviceName = getProvisioningDeviceName(info);
     if (info.fw) log(`${sourceLabel} 韌體版本：${info.fw}`, 'info');
     if (info.ssid) currentSsid = String(info.ssid).trim();
     setFieldValue('mqttUser', info.mqttUser, { preserveActive: true });
     setFieldValue('mqttPass', info.mqttPass, { preserveActive: true });
-    setFieldValue('deviceId', info.deviceId, { preserveActive: true });
-    setFieldValue('deviceName', info.deviceName, { preserveActive: true });
+    setFieldValue('deviceId', provisioningDeviceName, { preserveActive: true });
     setFieldValue('userEmail', info.email, { preserveActive: true });
     setFieldValue('serverNo', info.serverNo, { preserveActive: true });
     if (info.netInfo) updateNetInfo(String(info.netInfo).trim());
 
     if (info.ssid) log(`${sourceLabel} SSID：${info.ssid}`, 'ok');
     if (info.mqttUser) log(`${sourceLabel} MQTT User：${info.mqttUser}`, 'ok');
-    if (info.deviceId) log(`${sourceLabel} Device ID：${info.deviceId}`, 'ok');
-    if (info.deviceName) log(`${sourceLabel} Device Name：${info.deviceName}`, 'ok');
+    if (provisioningDeviceName) log(`${sourceLabel} 供裝設備名稱：${provisioningDeviceName}`, 'ok');
     if (info.email) log(`${sourceLabel} Email：${info.email}`, 'ok');
     if (info.serverNo) log(`${sourceLabel} Server No：${info.serverNo}`, 'ok');
     if (info.netInfo) log(`${sourceLabel} IP：${String(info.netInfo).split('|')[1] || info.netInfo}`, 'ok');
@@ -639,12 +640,12 @@ function applyStatusSnapshot(msg) {
   }
   if (key === 'DEVID') {
     setFieldValue('deviceId', value, { preserveActive: true });
-    log(`韌體 Device ID：${value}`, 'ok');
+    log(`韌體供裝設備名稱：${value}`, 'ok');
     return true;
   }
   if (key === 'DEVNAME') {
-    setFieldValue('deviceName', value, { preserveActive: true });
-    log(`韌體 Device Name：${value}`, 'ok');
+    setFieldValue('deviceId', value, { preserveActive: true });
+    log(`韌體供裝設備名稱：${value}`, 'ok');
     return true;
   }
   if (key === 'SERVERNO') {
@@ -747,11 +748,15 @@ btnConnect.addEventListener('click', async () => {
     if (!infoLoaded || !$('mqttPass').value.trim()) {
       await readTextChar(chars.mqttPass, 'mqttPass', 'MQTT Pass', { mask: true });
     }
+    const liveDeviceName = await readTextChar(chars.devName, null, 'Device Name');
+    const liveDeviceId = await readTextChar(chars.devId, null, 'Device ID');
     if (!infoLoaded || !$('deviceId').value.trim()) {
-      await readTextChar(chars.devId, 'deviceId', 'Device ID');
-    }
-    if (!infoLoaded || !$('deviceName').value.trim()) {
-      await readTextChar(chars.devName, 'deviceName', 'Device Name');
+      const provisioningDeviceName = getProvisioningDeviceName({
+        deviceId: liveDeviceId,
+        deviceName: liveDeviceName
+      });
+      setFieldValue('deviceId', provisioningDeviceName, { preserveActive: true });
+      if (provisioningDeviceName) log(`供裝頁設備名稱：${provisioningDeviceName}`, 'ok');
     }
     if (!infoLoaded || !$('userEmail').value.trim()) {
       await readTextChar(chars.email, 'userEmail', 'Email');
@@ -866,10 +871,9 @@ btnSend.addEventListener('click', async () => {
     await writeCharIfPresent(chars.mqttUser, '傳送設備帳號', mqttUser, { skipIfEmpty: true });
     const mqttPass = $('mqttPass').value;
     await writeCharIfPresent(chars.mqttPass, '傳送設備密碼', mqttPass, { skipIfEmpty: true, maskValue: true });
-    const devId = $('deviceId').value.trim();
-    await writeCharIfPresent(chars.devId, '傳送設備 ID', devId, { skipIfEmpty: true });
-    const devName = $('deviceName').value.trim();
-    await writeCharIfPresent(chars.devName, '傳送設備名稱', devName, { skipIfEmpty: true });
+    const provisioningDeviceName = $('deviceId').value.trim();
+    await writeCharIfPresent(chars.devId, '傳送設備 ID', provisioningDeviceName, { skipIfEmpty: true });
+    await writeCharIfPresent(chars.devName, '傳送設備名稱', provisioningDeviceName, { skipIfEmpty: true });
     const email = $('userEmail').value.trim();
     await writeCharIfPresent(chars.email, '傳送註冊 Email', email, { skipIfEmpty: true });
     const serverNo = $('serverNo').value.trim();
